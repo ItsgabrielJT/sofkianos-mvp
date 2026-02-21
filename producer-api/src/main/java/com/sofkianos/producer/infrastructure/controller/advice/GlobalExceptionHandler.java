@@ -1,5 +1,6 @@
 package com.sofkianos.producer.infrastructure.controller.advice;
 
+import com.sofkianos.producer.dto.ErrorResponse;
 import com.sofkianos.producer.exception.KudoPublishingException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -7,11 +8,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-import java.time.LocalDateTime;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -52,18 +51,18 @@ public class GlobalExceptionHandler {
          * @return a structured error body suitable for clients
          */
     @ExceptionHandler(KudoPublishingException.class)
-    public ResponseEntity<Map<String, Object>> handleKudoPublishingException(
+    public ResponseEntity<ErrorResponse> handleKudoPublishingException(
             KudoPublishingException ex) {
 
         log.error("Messaging failure: {}", ex.getMessage(), ex);
 
-        Map<String, Object> body = errorBody(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "The messaging service is temporarily unavailable. Please try again later.",
-                ex.getMessage()
-        );
-
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ErrorResponse.of(
+                        HttpStatus.SERVICE_UNAVAILABLE.value(),
+                        "The messaging service is temporarily unavailable. Please try again later.",
+                        ex.getMessage()
+                ));
     }
 
     // ── 400 Bad Request — Bean Validation failures ──────────────────────
@@ -74,7 +73,7 @@ public class GlobalExceptionHandler {
          * @return a structured error body with a field-level summary in {@code detail}
          */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, Object>> handleValidationErrors(
+    public ResponseEntity<ErrorResponse> handleValidationErrors(
             MethodArgumentNotValidException ex) {
 
         String errors = ex.getBindingResult().getFieldErrors().stream()
@@ -83,13 +82,37 @@ public class GlobalExceptionHandler {
 
         log.warn("Validation failed: {}", errors);
 
-        Map<String, Object> body = errorBody(
-                HttpStatus.BAD_REQUEST,
-                "Validation failed",
-                errors
-        );
+        return ResponseEntity
+                .badRequest()
+                .body(ErrorResponse.of(
+                        HttpStatus.BAD_REQUEST.value(),
+                        "Validation failed",
+                        errors
+                ));
+    }
 
-        return ResponseEntity.badRequest().body(body);
+    // ── 400 Bad Request — Method parameter validation (@Validated) ────
+        /**
+         * Handles constraint violations on {@code @RequestParam} and other
+         * method parameters annotated with Jakarta Validation constraints.
+         *
+         * @param ex exception thrown by Spring when {@code @Validated} controller
+         *           method parameters fail validation
+         * @return a {@code 400 Bad Request} response with validation details
+         */
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<ErrorResponse> handleMethodValidation(
+            HandlerMethodValidationException ex) {
+
+        log.warn("Method parameter validation failed: {}", ex.getMessage());
+
+        return ResponseEntity
+                .badRequest()
+                .body(ErrorResponse.of(
+                        HttpStatus.BAD_REQUEST.value(),
+                        "Validation failed",
+                        ex.getMessage()
+                ));
     }
 
     // ── 404 Not Found — static resource requests (favicon, /, etc.) ────
@@ -100,18 +123,18 @@ public class GlobalExceptionHandler {
          * @return a {@code 404 Not Found} response
          */
     @ExceptionHandler(NoResourceFoundException.class)
-    public ResponseEntity<Map<String, Object>> handleNoResourceFound(
+    public ResponseEntity<ErrorResponse> handleNoResourceFound(
             NoResourceFoundException ex) {
 
         log.debug("Resource not found: {}", ex.getMessage());
 
-        Map<String, Object> body = errorBody(
-                HttpStatus.NOT_FOUND,
-                "Resource not found",
-                ex.getMessage()
-        );
-
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body);
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(
+                        HttpStatus.NOT_FOUND.value(),
+                        "Resource not found",
+                        ex.getMessage()
+                ));
     }
 
     // ── 500 Internal Server Error — catch-all ───────────────────────────
@@ -122,34 +145,16 @@ public class GlobalExceptionHandler {
          * @return a {@code 500 Internal Server Error} response
          */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> handleGenericException(Exception ex) {
+    public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
 
         log.error("Unexpected error: {}", ex.getMessage(), ex);
 
-        Map<String, Object> body = errorBody(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                "An unexpected error occurred. Please contact support.",
-                ex.getMessage()
-        );
-
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
-    }
-
-    // ── Helper ──────────────────────────────────────────────────────────
-        /**
-         * Builds the standard error response body.
-         *
-         * @param status http status to expose to the client
-         * @param error human-friendly error message
-         * @param detail developer-oriented details (kept short)
-         * @return map that will be serialized as JSON
-         */
-    private Map<String, Object> errorBody(HttpStatus status, String error, String detail) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("timestamp", LocalDateTime.now().toString());
-        body.put("status", status.value());
-        body.put("error", error);
-        body.put("detail", detail);
-        return body;
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ErrorResponse.of(
+                        HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                        "An unexpected error occurred. Please contact support.",
+                        ex.getMessage()
+                ));
     }
 }
