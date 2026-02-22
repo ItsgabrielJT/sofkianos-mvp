@@ -752,3 +752,266 @@ And ejecuta kudosService.list con valores de URL
 | 0 | 5 | disabled | enabled | Sí |
 | 2 | 5 | enabled | enabled | Sí |
 | 4 | 5 | enabled | disabled | Sí |
+
+---
+
+# 🧪 Plan de Pruebas — Refactorización FASE 3: Adapter RabbitMQ
+
+**Fecha de creación**: 21 de febrero de 2026  
+**Historia(s) base**: US-005 (Implementar Adapter `RabbitMqKudoPublisher`)
+
+---
+
+## 📋 Índice de Tests — US-005
+
+| Completado | ID Test | Capa | Prioridad | Historia | Descripción |
+|------------|---------|------|------------|----------|-------------|
+| ☐ | TC-R05-001 | Backend (Unit) | CRÍTICA | US-005 | Adapter delega correctamente a RabbitTemplate con exchange y routing-key |
+| ☐ | TC-R05-002 | Backend (Unit) | CRÍTICA | US-005 | AmqpException se envuelve en KudoPublishingException |
+| ☐ | TC-R05-003 | Backend (Architecture) | CRÍTICA | US-005 | KudoServiceImpl NO importa RabbitTemplate ni ObjectMapper |
+| ☐ | TC-R05-004 | Backend (Integration) | ALTA | US-005 | Mensaje llega a RabbitMQ con formato JSON correcto via Testcontainers |
+| ☐ | TC-R05-005 | Backend (Unit) | ALTA | US-005 | Adapter registra logs de publicación exitosa y fallida |
+
+---
+
+## 🔵 Pruebas Backend — US-005
+
+### TC-R05-001 — Adapter delega correctamente a RabbitTemplate con exchange y routing-key
+
+- **ID del Test**: TC-R05-001
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-005
+- **Descripción**: Validar que `RabbitMqKudoPublisher.publish()` invoca `rabbitTemplate.convertAndSend(exchange, routingKey, event)` con los argumentos exactos configurados por `@Value`.
+- **Riesgo cubierto**: Adapter envía mensaje al exchange/routing-key incorrecto, causando pérdida silenciosa de eventos Kudo. El "Kudo Fantasma" a nivel de infraestructura.
+- **Precondiciones**:
+  - `RabbitMqKudoPublisher` inyectado con mocks de `RabbitTemplate`
+  - Campos `exchangeName` y `routingKey` configurados con valores de prueba
+- **Postcondiciones**: RabbitTemplate invocado exactamente una vez con los 3 argumentos correctos.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un RabbitMqKudoPublisher con exchange="kudos.exchange" y routingKey="kudos.key"
+And un KudoEvent válido con from="alice@sofka.com", to="bob@sofka.com", category="Teamwork"
+When se invoca publish(event)
+Then rabbitTemplate.convertAndSend es invocado exactamente 1 vez
+And el primer argumento es "kudos.exchange"
+And el segundo argumento es "kudos.key"
+And el tercer argumento es el KudoEvent original (referencia exacta)
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Valores | Tipo |
+|-------|---------|------|
+| Evento con todos los campos | from, to, category, message, timestamp | Válido — publica correctamente |
+| Evento con campos mínimos | from, to (message=null, timestamp=null) | Válido — delega sin validar |
+| Evento válido con categorías distintas | Innovation, Teamwork, Passion, Mastery | Válido — publica todas |
+
+#### Valores Límite
+
+| Valor | Contexto | Resultado Esperado |
+|-------|----------|-------------------|
+| KudoEvent con message="" | Mensaje vacío | publish delega (validación es responsabilidad del dominio) |
+| KudoEvent con message de 500 chars | Mensaje en límite máximo | publish delega correctamente |
+| KudoEvent con timestamp=null | Sin timestamp | publish delega (no valida) |
+
+#### Tabla de Decisión
+
+| Evento válido | RabbitTemplate OK | Resultado |
+|--------------|-------------------|-----------|
+| Sí | Sí | convertAndSend invocado 1 vez, sin excepción |
+| Sí | No (AmqpException) | KudoPublishingException lanzada (ver TC-R05-002) |
+
+---
+
+### TC-R05-002 — AmqpException se envuelve en KudoPublishingException
+
+- **ID del Test**: TC-R05-002
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-005
+- **Descripción**: Validar que cuando `RabbitTemplate.convertAndSend()` lanza `AmqpException`, el adapter la captura y la re-lanza envuelta en `KudoPublishingException` con mensaje descriptivo y causa original preservada.
+- **Riesgo cubierto**: Excepciones de infraestructura (AMQP) se propagan al service layer sin envoltura de dominio, rompiendo la separación de capas. El `GlobalExceptionHandler` no podría mapear correctamente a HTTP 503.
+- **Precondiciones**:
+  - `RabbitTemplate` mockeado para lanzar `AmqpException` en `convertAndSend()`
+- **Postcondiciones**: `KudoPublishingException` lanzada con causa encadenada.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un RabbitMqKudoPublisher con RabbitTemplate que falla
+And rabbitTemplate.convertAndSend() lanza AmqpException("Connection refused")
+When se invoca publish(event)
+Then se lanza KudoPublishingException
+And el mensaje contiene "Error publishing KudoEvent to message broker"
+And la causa (getCause()) es la AmqpException original
+And el stack trace preserva la cadena completa
+
+Given un RabbitMqKudoPublisher con RabbitTemplate que retorna OK
+When se invoca publish(event)
+Then NO se lanza ninguna excepción
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Excepción del RabbitTemplate | Tipo |
+|-------|------------------------------|------|
+| Sin excepción | Ninguna | Válido — publicación exitosa |
+| AmqpException genérica | AmqpException | Inválido — envuelve en KudoPublishingException |
+| AmqpConnectException | Conexión rechazada | Inválido — envuelve en KudoPublishingException |
+| AmqpIOException | I/O failure | Inválido — envuelve en KudoPublishingException |
+
+#### Valores Límite
+
+| Valor | Contexto | Resultado Esperado |
+|-------|----------|-------------------|
+| AmqpException con mensaje null | Excepción sin mensaje | KudoPublishingException con mensaje fijo del adapter |
+| AmqpException con causa anidada | Nested exception | causa preservada en la cadena |
+
+---
+
+### TC-R05-003 — KudoServiceImpl NO importa RabbitTemplate ni ObjectMapper
+
+- **ID del Test**: TC-R05-003
+- **Capa**: Backend (Architecture — Pure JUnit 5)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-005
+- **Descripción**: Validar mediante inspección reflexiva que `KudoServiceImpl` del producer es libre de dependencias de infraestructura (`RabbitTemplate`, `ObjectMapper`). Esto garantiza que el patrón Adapter/Port funciona correctamente y la inversión de dependencias (DIP) se mantiene.
+- **Riesgo cubierto**: Desarrollador inyecta `RabbitTemplate` directamente en el servicio, violando DIP y acoplando el dominio a la infraestructura de mensajería.
+- **Precondiciones**:
+  - `KudoServiceImpl` compilado y accesible vía reflexión
+- **Postcondiciones**: Test puro sin contexto Spring.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given la clase KudoServiceImpl del producer
+When inspecciono sus campos declarados (getDeclaredFields)
+Then ningún campo tiene tipo RabbitTemplate
+And ningún campo tiene tipo ObjectMapper
+
+Given la clase KudoServiceImpl del producer
+When inspecciono los parámetros de su constructor
+Then ningún parámetro es RabbitTemplate
+And ningún parámetro es ObjectMapper
+
+Given el source file de KudoServiceImpl
+When examino sus imports
+Then NO contiene "org.springframework.amqp"
+And NO contiene "com.fasterxml.jackson"
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Verificación | Tipo |
+|-------|-------------|------|
+| Campos del servicio | Solo KudoEventPublisher | Válido — DIP cumplido |
+| Constructor del servicio | Solo recibe ports/interfaces | Válido — inyección limpia |
+| Imports del servicio | Sin amqp ni jackson | Válido — desacoplado |
+
+#### Tabla de Decisión
+
+| ¿Tiene RabbitTemplate? | ¿Tiene ObjectMapper? | Resultado |
+|------------------------|---------------------|-----------|
+| No | No | ✅ DIP cumplido — test PASS |
+| Sí | No | ❌ DIP violado — test FAIL |
+| No | Sí | ❌ DIP violado — test FAIL |
+| Sí | Sí | ❌ DIP violado — test FAIL |
+
+---
+
+### TC-R05-004 — Mensaje llega a RabbitMQ con formato JSON correcto via Testcontainers
+
+- **ID del Test**: TC-R05-004
+- **Capa**: Backend (Integration — Testcontainers)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-005
+- **Descripción**: Validar que el adapter `RabbitMqKudoPublisher` publica un mensaje JSON completo a RabbitMQ real (via Testcontainers) y que el mensaje puede ser consumido y deserializado correctamente preservando todos los campos del contrato `KudoEvent`.
+- **Riesgo cubierto**: Fallo de serialización (el incidente "Kudo Fantasma"), incompatibilidad de formato JSON entre producer y consumer, pérdida de datos en tránsito.
+- **Precondiciones**:
+  - Testcontainers con RabbitMQ levantado
+  - Spring Boot context completo
+  - `Jackson2JsonMessageConverter` configurado en `RabbitConfig`
+- **Postcondiciones**: Mensaje consumido con todos los campos intactos.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un contenedor RabbitMQ en ejecución via Testcontainers
+And RabbitMqKudoPublisher inyectado con contexto real
+And un KudoEvent con from="alice@sofka.com", to="bob@sofka.com", category="Innovation", message="Great work!", timestamp=2026-02-21T10:00:00
+When se invoca publish(event)
+Then el mensaje llega a la cola "kudos.queue"
+And se deserializa correctamente a KudoEvent
+And event.getFrom() == "alice@sofka.com"
+And event.getTo() == "bob@sofka.com"
+And event.getCategory() == "Innovation"
+And event.getMessage() == "Great work!"
+And event.getTimestamp() == 2026-02-21T10:00:00
+
+Given un KudoEvent con timestamp LocalDateTime preciso
+When se serializa a JSON y luego se deserializa
+Then el timestamp mantiene formato ISO-8601 sin pérdida de precisión
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Evento enviado | Tipo |
+|-------|----------------|------|
+| Evento completo | Todos los campos no-null | Válido — serialización completa |
+| Evento con campos opcionales null | timestamp=null | Válido — campo omitido en JSON |
+| Evento con caracteres especiales | message con acentos, emojis | Válido — UTF-8 preservado |
+
+#### Valores Límite
+
+| Valor | Contexto | Resultado Esperado |
+|-------|----------|-------------------|
+| message="a".repeat(500) | Mensaje en límite máximo | JSON completo, sin truncamiento |
+| timestamp con nanosegundos | LocalDateTime.of(2026,2,21,10,0,0,123456789) | Precisión preservada en ISO-8601 |
+| category="Innovation" | Primera categoría válida | Serialización correcta |
+
+---
+
+### TC-R05-005 — Adapter registra logs de publicación exitosa y fallida
+
+- **ID del Test**: TC-R05-005
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-005
+- **Descripción**: Validar que `RabbitMqKudoPublisher` produce logs INFO al publicar exitosamente y logs ERROR cuando falla la publicación, facilitando la observabilidad del sistema en producción.
+- **Riesgo cubierto**: Sin logs adecuados, los fallos de publicación son invisibles en producción. Dificultad para diagnosticar el "Kudo Fantasma".
+- **Precondiciones**:
+  - Appender de logs capturado (LogCaptor o similar)
+- **Postcondiciones**: Logs verificados sin levantar contexto Spring.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un RabbitMqKudoPublisher con RabbitTemplate mock exitoso
+And un KudoEvent con from="alice@sofka.com", to="bob@sofka.com", category="Teamwork"
+When se invoca publish(event)
+Then se registra log INFO conteniendo "Publishing KudoEvent to RabbitMQ"
+And el log incluye from="alice@sofka.com", to="bob@sofka.com", category="Teamwork"
+And se registra log DEBUG conteniendo "KudoEvent published successfully"
+
+Given un RabbitMqKudoPublisher con RabbitTemplate que lanza AmqpException
+When se invoca publish(event) y falla
+Then se registra log ERROR conteniendo "Failed to publish KudoEvent to RabbitMQ"
+And la excepción se incluye como parámetro del log (stack trace disponible)
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Resultado de publish | Logs esperados |
+|-------|---------------------|----------------|
+| Publicación exitosa | Sin excepción | INFO + DEBUG |
+| Publicación fallida | AmqpException | INFO + ERROR |
+
+#### Tabla de Decisión
+
+| Publicación OK | Log INFO presente | Log DEBUG presente | Log ERROR presente |
+|---------------|-------------------|--------------------|--------------------|
+| Sí | Sí | Sí | No |
+| No (AmqpException) | Sí (antes del error) | No | Sí |
