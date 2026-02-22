@@ -40,7 +40,7 @@ Al validar primero este nivel, garantizamos que el sistema falle **rápido, bara
 |------------|---------|------|------------|----------|-------------|
 | ☐ | TC-001 | Backend | CRÍTICA | US-001 | Endpoint GET retorna estructura paginada correcta |
 | ☐ | TC-002 | Backend | CRÍTICA | US-001 | Validación de límites en parámetros size y sortDirection |
-| ☐ | TC-003 | Backend | CRÍTICA | US-002 | Conexión read-only a PostgreSQL sin escrituras |
+| ☑ | TC-003 | Backend | CRÍTICA | US-002 | Conexión read-only a PostgreSQL sin escrituras |
 | ☐ | TC-004 | Backend | CRÍTICA | US-006 | Enmascaramiento de emails en fromUser y toUser |
 | ☐ | TC-005 | Backend | CRÍTICA | US-007 | Manejo de errores y mapeo de estados HTTP |
 | ☐ | TC-006 | Backend | CRÍTICA | US-004 | Filtros dinámicos construyen queries correctas |
