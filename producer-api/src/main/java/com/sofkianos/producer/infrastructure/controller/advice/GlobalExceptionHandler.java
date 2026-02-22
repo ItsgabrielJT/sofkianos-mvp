@@ -1,6 +1,7 @@
 package com.sofkianos.producer.infrastructure.controller.advice;
 
 import com.sofkianos.producer.dto.ErrorResponse;
+import com.sofkianos.producer.exception.InvalidKudoException;
 import com.sofkianos.producer.exception.KudoPublishingException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -42,6 +43,29 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    // ── 400 Bad Request — Domain validation (Strategy) failure ────────
+    /**
+     * Converts {@link InvalidKudoException} — thrown by Strategy validation —
+     * into an HTTP {@code 400 Bad Request} response.
+     *
+     * @param ex the domain validation exception
+     * @return a structured error body with the validation failure detail
+     */
+    @ExceptionHandler(InvalidKudoException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidKudoException(
+            InvalidKudoException ex) {
+
+        log.warn("Domain validation failed: {}", ex.getMessage());
+
+        return ResponseEntity
+                .badRequest()
+                .body(ErrorResponse.of(
+                        HttpStatus.BAD_REQUEST.value(),
+                        "Domain validation failed",
+                        ex.getMessage()
+                ));
+    }
 
     // ── 503 Service Unavailable — messaging infrastructure failure ──────
         /**

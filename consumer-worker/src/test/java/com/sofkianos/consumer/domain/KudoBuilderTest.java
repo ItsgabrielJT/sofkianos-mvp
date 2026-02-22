@@ -51,6 +51,6 @@ class KudoBuilderTest {
                 .message("   ") // Blank message
                 .build())
                 .isInstanceOf(InvalidKudoException.class)
-                .hasMessage("Message cannot be empty");
+                .hasMessage("'message' must not be null or empty");
     }
 }

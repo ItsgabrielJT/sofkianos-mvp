@@ -1015,3 +1015,460 @@ And la excepción se incluye como parámetro del log (stack trace disponible)
 |---------------|-------------------|--------------------|--------------------|
 | Sí | Sí | Sí | No |
 | No (AmqpException) | Sí (antes del error) | No | Sí |
+
+---
+
+# 🧪 Plan de Pruebas — Refactorización FASE 3: Consumer Tipado (US-007)
+
+**Fecha de creación**: 21 de febrero de 2026  
+**Historia(s) base**: US-007 (Eliminar Primitive Obsession en KudosConsumer con Deserialización Tipada)
+
+---
+
+## 📋 Índice de Tests — US-007
+
+| Completado | ID Test | Capa | Prioridad | Historia | Descripción |
+|------------|---------|------|------------|----------|-------------|
+| ☐ | TC-R07-001 | Backend (Unit) | CRÍTICA | US-007 | KudosConsumer recibe KudoEvent tipado (no String) |
+| ☐ | TC-R07-002 | Backend (Architecture) | CRÍTICA | US-007 | KudosConsumer y KudoService NO usan String como payload |
+| ☐ | TC-R07-003 | Backend (Unit) | CRÍTICA | US-007 | Jackson2JsonMessageConverter registrado como Bean en RabbitConfig |
+| ☐ | TC-R07-004 | Backend (Unit) | ALTA | US-007 | KudoServiceImpl mapea KudoEvent a Kudo vía Builder validado |
+| ☐ | TC-R07-005 | Backend (Unit) | ALTA | US-007 | KudoServiceImpl NO contiene ObjectMapper, JsonNode ni readTree() |
+| ☐ | TC-R07-006 | Backend (Unit) | ALTA | US-007 | KudoEvent inválido lanza InvalidKudoException al construir entidad |
+
+---
+
+## 🔵 Pruebas Backend — US-007
+
+### TC-R07-001 — KudosConsumer recibe KudoEvent tipado (no String)
+
+- **ID del Test**: TC-R07-001
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-007
+- **Descripción**: Validar que `KudosConsumer.handleKudo()` acepta `KudoEvent` como parámetro (no `String`) y delega directamente al servicio sin parseo manual.
+- **Riesgo cubierto**: KudosConsumer mantiene firma con `String`, requiriendo parseo manual de JSON y exponiendo al incidente "Kudo Fantasma" por deserialización incorrecta.
+- **Precondiciones**:
+  - `KudosConsumer` con firma `handleKudo(@Payload KudoEvent event)`
+  - `KudoService` mockeado
+- **Postcondiciones**: `kudoService.saveKudo(event)` invocado exactamente 1 vez con el mismo objeto `KudoEvent`.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudosConsumer con KudoService mockeado
+And un KudoEvent válido con from="alice@sofka.com", to="bob@sofka.com", category="Teamwork"
+When se invoca handleKudo(event)
+Then kudoService.saveKudo es invocado exactamente 1 vez
+And el argumento pasado es el mismo KudoEvent (referencia exacta)
+And NO se invoca ObjectMapper, JsonNode ni parseo manual alguno
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Tipo de payload | Tipo |
+|-------|----------------|------|
+| KudoEvent con todos los campos | Evento completo | Válido — se delega al servicio |
+| KudoEvent con campos mínimos | from, to, category, message | Válido — se delega (timestamp null) |
+
+#### Tabla de Decisión
+
+| Evento válido | saveKudo invocado | Resultado |
+|--------------|-------------------|-----------|
+| Sí | Sí (1 vez) | Procesamiento exitoso |
+
+---
+
+### TC-R07-002 — KudosConsumer y KudoService NO usan String como payload
+
+- **ID del Test**: TC-R07-002
+- **Capa**: Backend (Architecture — Pure JUnit 5)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-007
+- **Descripción**: Validar vía reflexión que la firma de `handleKudo()` en `KudosConsumer` y `saveKudo()` en `KudoService` usan `KudoEvent` como tipo de parámetro, no `String`.
+- **Riesgo cubierto**: Regresión que reintroduce `String` como payload, re-habilitando el Primitive Obsession eliminado.
+- **Precondiciones**:
+  - Clases compiladas y accesibles vía reflexión
+- **Postcondiciones**: Test puro sin contexto Spring.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given la clase KudosConsumer del consumer
+When inspecciono el método handleKudo
+Then su primer parámetro es de tipo KudoEvent, no String
+
+Given la interfaz KudoService del consumer
+When inspecciono el método saveKudo
+Then su primer parámetro es de tipo KudoEvent, no String
+
+Given la implementación KudoServiceImpl del consumer
+When inspecciono sus campos declarados
+Then NO tiene campos de tipo ObjectMapper
+And NO tiene campos de tipo JsonNode
+```
+
+#### Tabla de Decisión
+
+| handleKudo(KudoEvent) | saveKudo(KudoEvent) | Resultado |
+|-----------------------|---------------------|-----------|
+| Sí | Sí | ✅ Primitive Obsession eliminado |
+| No (String) | Sí | ❌ Consumer no refactorizado |
+| Sí | No (String) | ❌ Service no refactorizado |
+
+---
+
+### TC-R07-003 — Jackson2JsonMessageConverter registrado como Bean en RabbitConfig
+
+- **ID del Test**: TC-R07-003
+- **Capa**: Backend (Architecture — Pure JUnit 5)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-007
+- **Descripción**: Validar que `RabbitConfig` del consumer declara un `@Bean` de tipo `MessageConverter` con implementación `Jackson2JsonMessageConverter` para deserialización automática.
+- **Riesgo cubierto**: Sin `Jackson2JsonMessageConverter`, Spring AMQP usa `SimpleMessageConverter` que entrega `byte[]`/`String` raw, obligando a parseo manual.
+- **Precondiciones**:
+  - `RabbitConfig` compilada y accesible vía reflexión
+- **Postcondiciones**: Al menos un método `@Bean` retorna `MessageConverter`.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given la clase RabbitConfig del consumer
+When inspecciono sus métodos anotados con @Bean
+Then al menos un método retorna tipo MessageConverter
+And ese método retorna una instancia de Jackson2JsonMessageConverter
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Configuración | Tipo |
+|-------|--------------|------|
+| Jackson2JsonMessageConverter como @Bean | Método retorna MessageConverter | Válido — deserialización automática |
+| SimpleMessageConverter (default) | Sin @Bean de converter | Inválido — payload llega como byte[] |
+
+---
+
+### TC-R07-004 — KudoServiceImpl mapea KudoEvent a Kudo vía Builder validado
+
+- **ID del Test**: TC-R07-004
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-007
+- **Descripción**: Validar que `KudoServiceImpl.saveKudo(KudoEvent)` construye la entidad `Kudo` usando el Builder con validaciones de dominio y persiste via `KudoPersistencePort`.
+- **Riesgo cubierto**: Servicio mapea campos incorrectamente (from→toUser swap), o construye entidad sin pasar por Builder validado, permitiendo datos inválidos.
+- **Precondiciones**:
+  - `KudoPersistencePort` mockeado
+  - `KudoEvent` con todos los campos válidos
+- **Postcondiciones**: `persistencePort.save()` invocado con `Kudo` correctamente construido.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudoServiceImpl con KudoPersistencePort mockeado
+And un KudoEvent con from="alice@sofka.com", to="bob@sofka.com", category="Innovation", message="Great idea!", timestamp=2026-02-21T10:00:00
+When se invoca saveKudo(event)
+Then persistencePort.save es invocado 1 vez
+And el Kudo capturado tiene fromUser="alice@sofka.com"
+And toUser="bob@sofka.com"
+And category=KudoCategory.INNOVATION
+And message="Great idea!"
+And createdAt=2026-02-21T10:00:00
+```
+
+#### Partición de Equivalencia
+
+| Grupo | KudoEvent | Tipo |
+|-------|-----------|------|
+| Evento con todas las categorías | Innovation, Teamwork, Passion, Mastery | Válido — mapea correctamente |
+| Evento con timestamp null | Sin fecha | Válido — Builder asigna LocalDateTime.now() |
+| Evento con from==to | Self-kudo | Inválido — Builder lanza InvalidKudoException |
+
+#### Valores Límite
+
+| Valor | Contexto | Resultado Esperado |
+|-------|----------|-------------------|
+| message de 10 chars | Mínimo válido | Kudo construido correctamente |
+| message de 500 chars | Máximo válido | Kudo construido correctamente |
+| category="Innovation" | Case-insensitive match | KudoCategory.INNOVATION |
+| timestamp=null | Sin timestamp en evento | Builder asigna now() |
+
+---
+
+### TC-R07-005 — KudoServiceImpl NO contiene ObjectMapper, JsonNode ni readTree()
+
+- **ID del Test**: TC-R07-005
+- **Capa**: Backend (Architecture — Pure JUnit 5)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-007
+- **Descripción**: Validar que `KudoServiceImpl` del consumer no tiene dependencias de Jackson (`ObjectMapper`, `JsonNode`, `readTree`). Toda deserialización debe ser responsabilidad del framework (Spring AMQP) o de la capa de infraestructura.
+- **Riesgo cubierto**: Servicio de dominio acoplado a librería de serialización, violando SRP y Clean Architecture.
+- **Precondiciones**:
+  - `KudoServiceImpl` compilada y accesible vía reflexión
+- **Postcondiciones**: Test puro sin contexto Spring.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given la clase KudoServiceImpl del consumer
+When inspecciono sus campos declarados
+Then NO tiene campos de tipo ObjectMapper
+And NO tiene campos de tipo JsonNode
+
+Given la clase KudoServiceImpl del consumer
+When inspecciono los parámetros de sus constructores
+Then ningún parámetro es ObjectMapper
+```
+
+#### Tabla de Decisión
+
+| ¿Tiene ObjectMapper? | ¿Tiene JsonNode? | Resultado |
+|---------------------|------------------|-----------|
+| No | No | ✅ SRP cumplido |
+| Sí | No | ❌ SRP violado |
+| No | Sí | ❌ SRP violado |
+| Sí | Sí | ❌ SRP violado |
+
+---
+
+### TC-R07-006 — KudoEvent inválido lanza InvalidKudoException al construir entidad
+
+- **ID del Test**: TC-R07-006
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-007
+- **Descripción**: Validar que cuando un `KudoEvent` tiene datos inválidos (campos vacíos, self-kudo), el `Kudo.Builder` lanza `InvalidKudoException` y `KudoPersistencePort.save()` nunca se invoca.
+- **Riesgo cubierto**: Datos inválidos que pasan el Builder y se persisten en BD, contaminando datos de producción.
+- **Precondiciones**:
+  - `KudoPersistencePort` mockeado
+  - `KudoEvent` con datos inválidos
+- **Postcondiciones**: `persistencePort.save()` NUNCA invocado.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudoEvent con from="" (vacío)
+When se invoca saveKudo(event)
+Then se lanza InvalidKudoException con mensaje "'fromUser' must not be null or empty"
+And persistencePort.save() NO es invocado
+
+Given un KudoEvent con from="alice@sofka.com" y to="alice@sofka.com" (self-kudo)
+When se invoca saveKudo(event)
+Then se lanza InvalidKudoException con mensaje "Cannot send kudo to yourself"
+And persistencePort.save() NO es invocado
+
+Given un KudoEvent con category="INVALID_CATEGORY"
+When se invoca saveKudo(event)
+Then se lanza IllegalArgumentException con mensaje "Unknown KudoCategory"
+And persistencePort.save() NO es invocado
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Datos del evento | Tipo |
+|-------|-----------------|------|
+| from vacío | from="" | Inválido — lanza InvalidKudoException |
+| to vacío | to="" | Inválido — lanza InvalidKudoException |
+| message vacío | message="" | Inválido — lanza InvalidKudoException |
+| self-kudo | from==to | Inválido — lanza InvalidKudoException |
+| categoría inválida | category="INVALID" | Inválido — lanza IllegalArgumentException |
+| Evento completamente válido | Todos los campos OK | Válido — persiste correctamente |
+
+---
+
+# 🧪 Plan de Pruebas — Refactorización FASE 3: Strategy Validation (US-012)
+
+**Fecha de creación**: 21 de febrero de 2026  
+**Historia(s) base**: US-012 (Integrar Validación por Strategy en el Flujo del Producer)
+
+---
+
+## 📋 Índice de Tests — US-012
+
+| Completado | ID Test | Capa | Prioridad | Historia | Descripción |
+|------------|---------|------|------------|----------|-------------|
+| ☐ | TC-R12-001 | Backend (Unit) | CRÍTICA | US-012 | KudoValidationContext resuelve y ejecuta estrategia por categoría |
+| ☐ | TC-R12-002 | Backend (Unit) | CRÍTICA | US-012 | Categoría no registrada lanza InvalidKudoException |
+| ☐ | TC-R12-003 | Backend (Unit) | CRÍTICA | US-012 | KudoServiceImpl invoca validationContext.validate() antes de publish |
+| ☐ | TC-R12-004 | Backend (Unit) | ALTA | US-012 | Validación fallida impide publicación al broker |
+| ☐ | TC-R12-005 | Backend (Architecture) | ALTA | US-012 | Cada estrategia es independiente y extensible (OCP) |
+| ☐ | TC-R12-006 | Backend (Controller) | ALTA | US-012 | Bean Validation (API) + Strategy (dominio) coexisten sin conflicto |
+
+---
+
+## 🔵 Pruebas Backend — US-012
+
+### TC-R12-001 — KudoValidationContext resuelve y ejecuta estrategia por categoría
+
+- **ID del Test**: TC-R12-001
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-012
+- **Descripción**: Validar que `KudoValidationContext` selecciona la estrategia correcta según `request.getCategory()` y ejecuta `validate()` sobre ella.
+- **Riesgo cubierto**: Context no resuelve la estrategia, ejecuta la Strategy incorrecta, o ignora la validación completamente.
+- **Precondiciones**:
+  - 4 estrategias mockeadas registradas en el contexto
+- **Postcondiciones**: Solo la estrategia correspondiente a la categoría es invocada.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudoValidationContext con 4 estrategias: Innovation, Teamwork, Passion, Mastery
+And un KudoRequest con category="Teamwork"
+When se invoca validate(request)
+Then SOLO TeamworkValidationStrategy.validate() es invocado
+And las demás estrategias NO son invocadas
+```
+
+#### Partición de Equivalencia
+
+| Grupo | Categoría | Tipo |
+|-------|-----------|------|
+| Innovation | Válida | Válido — ejecuta InnovationValidationStrategy |
+| Teamwork | Válida | Válido — ejecuta TeamworkValidationStrategy |
+| Passion | Válida | Válido — ejecuta PassionValidationStrategy |
+| Mastery | Válida | Válido — ejecuta MasteryValidationStrategy |
+| Unknown | "Leadership" | Inválido — lanza InvalidKudoException (TC-R12-002) |
+
+---
+
+### TC-R12-002 — Categoría no registrada lanza InvalidKudoException
+
+- **ID del Test**: TC-R12-002
+- **Capa**: Backend (Unit)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-012
+- **Descripción**: Validar que cuando `KudoValidationContext.validate()` recibe un request con categoría no registrada en ninguna estrategia, lanza `InvalidKudoException` con mensaje descriptivo.
+- **Riesgo cubierto**: Categoría desconocida pasa validación silenciosamente, se publica un evento con categoría inválida que luego falla en el consumer.
+- **Precondiciones**:
+  - Context con 4 estrategias (sin cobertura para "Leadership")
+- **Postcondiciones**: `InvalidKudoException` lanzada, ninguna estrategia ejecutada.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudoValidationContext sin estrategia para "Leadership"
+And un KudoRequest con category="Leadership"
+When se invoca validate(request)
+Then se lanza InvalidKudoException
+And el mensaje contiene "Unsupported category: Leadership"
+And ninguna estrategia fue invocada
+```
+
+---
+
+### TC-R12-003 — KudoServiceImpl invoca validationContext.validate() antes de publish
+
+- **ID del Test**: TC-R12-003
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: CRÍTICA
+- **Historia asociada**: US-012
+- **Descripción**: Validar que `KudoServiceImpl.sendKudo()` ejecuta `validationContext.validate(request)` ANTES de `publisher.publish(event)`, garantizando que la validación de dominio ocurre antes de la publicación.
+- **Riesgo cubierto**: Servicio publica al broker sin validar, permitiendo que eventos inválidos por reglas de dominio lleguen al consumer y fallen allí (más caro).
+- **Precondiciones**:
+  - `KudoValidationContext` y `KudoEventPublisher` mockeados
+  - Mockito `InOrder` para verificar secuencia
+- **Postcondiciones**: validate() SIEMPRE se ejecuta antes de publish().
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudoServiceImpl con KudoValidationContext y KudoEventPublisher mockeados
+And un KudoRequest válido
+When se invoca sendKudo(request)
+Then primero se invoca validationContext.validate(request)
+Then después se invoca kudoEventPublisher.publish(event)
+And el orden es estrictamente secuencial (validate ANTES de publish)
+```
+
+#### Tabla de Decisión
+
+| Validación OK | Publicación | Resultado |
+|--------------|-------------|-----------|
+| Sí | Se ejecuta | 202 ACCEPTED con KudoResponse |
+| No (InvalidKudoException) | NO se ejecuta | Excepción propagada (TC-R12-004) |
+
+---
+
+### TC-R12-004 — Validación fallida impide publicación al broker
+
+- **ID del Test**: TC-R12-004
+- **Capa**: Backend (Unit — Mockito)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-012
+- **Descripción**: Validar que cuando `KudoValidationContext.validate()` lanza excepción, `KudoEventPublisher.publish()` NUNCA es invocado.
+- **Riesgo cubierto**: Excepción de validación capturada silenciosamente, evento publicado de todas formas.
+- **Precondiciones**:
+  - `KudoValidationContext.validate()` configurado para lanzar `InvalidKudoException`
+- **Postcondiciones**: `publish()` tiene 0 invocaciones.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given KudoValidationContext.validate() lanza InvalidKudoException("Self-kudo not allowed")
+When se invoca sendKudo(request)
+Then se propaga InvalidKudoException
+And kudoEventPublisher.publish() NO es invocado (verify 0 times)
+```
+
+---
+
+### TC-R12-005 — Cada estrategia es independiente y extensible (OCP)
+
+- **ID del Test**: TC-R12-005
+- **Capa**: Backend (Architecture — Pure JUnit 5)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-012
+- **Descripción**: Validar que cada implementación de `KudoValidationStrategy` es una clase independiente y que agregar una nueva categoría solo requiere crear una nueva clase sin modificar las existentes (Open/Closed Principle).
+- **Riesgo cubierto**: Sistema de validación monolítico que requiere modificar clases existentes para agregar nuevas reglas.
+- **Precondiciones**:
+  - Al menos 4 implementaciones de `KudoValidationStrategy` en el classpath
+- **Postcondiciones**: Test puro sin contexto Spring.
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given las implementaciones de KudoValidationStrategy en el classpath
+When inspecciono las clases que implementan la interfaz
+Then existen al menos 4 implementaciones independientes
+And cada una está en su propia clase (no inner classes)
+And todas implementan el método validate(KudoRequest)
+```
+
+---
+
+### TC-R12-006 — Bean Validation (API) + Strategy (dominio) coexisten sin conflicto
+
+- **ID del Test**: TC-R12-006
+- **Capa**: Backend (Controller — @WebMvcTest)
+- **Prioridad**: ALTA
+- **Historia asociada**: US-012
+- **Descripción**: Validar que Bean Validation (`@Valid` en controller) y Strategy validation (dominio) operan como dos capas complementarias: API valida formato primero, dominio valida reglas de negocio después.
+- **Riesgo cubierto**: Bean Validation y Strategy entran en conflicto, validaciones duplicadas que confunden el error, o una capa anula a la otra.
+- **Precondiciones**:
+  - `@Valid` activo en `KudosController.publishKudos()`
+  - `KudoValidationContext` integrado en `KudoServiceImpl`
+- **Postcondiciones**: Cada capa produce errores HTTP distintos (422 vs 400).
+
+#### Escenario (Gherkin)
+
+```gherkin
+Given un KudoRequest con from="" (falla Bean Validation @NotBlank)
+When se envía POST /api/v1/kudos
+Then Bean Validation rechaza ANTES de llegar al servicio
+And retorna 400 Bad Request con detalle de campo
+And KudoValidationContext.validate() NUNCA es invocado
+
+Given un KudoRequest válido por Bean Validation pero from==to
+When se envía POST /api/v1/kudos
+Then Bean Validation pasa (formato correcto)
+And KudoValidationContext.validate() lanza InvalidKudoException
+And retorna error HTTP apropiado
+```
+
+#### Tabla de Decisión
+
+| Bean Validation | Strategy Validation | Resultado HTTP |
+|----------------|--------------------|----|
+| Falla | N/A (no se ejecuta) | 400 Bad Request |
+| Pasa | Falla | 400 Bad Request (InvalidKudoException) |
+| Pasa | Pasa | 202 Accepted |
