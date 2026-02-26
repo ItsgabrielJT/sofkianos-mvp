@@ -1,7 +1,9 @@
 package com.sofkianos.producer.controller;
 
-import com.sofkianos.producer.dto.KudoRequest;
-import com.sofkianos.producer.service.KudoService;
+import com.sofkianos.producer.application.dto.KudoRequest;
+import com.sofkianos.producer.application.dto.KudoResponse;
+import com.sofkianos.producer.application.ports.in.KudoService;
+import com.sofkianos.producer.infrastructure.inbound.web.KudosController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,7 +39,7 @@ class KudosControllerTest {
                 .message("Great job on the project!")
                 .build();
         
-        com.sofkianos.producer.dto.KudoResponse mockResponse = com.sofkianos.producer.dto.KudoResponse.builder()
+        KudoResponse mockResponse = KudoResponse.builder()
                 .id("123-abc")
                 .status("ACCEPTED")
                 .build();
@@ -45,7 +47,7 @@ class KudosControllerTest {
         when(kudoService.sendKudo(any(KudoRequest.class))).thenReturn(mockResponse);
 
         // Act
-        ResponseEntity<com.sofkianos.producer.dto.KudoResponse> response = kudosController.publishKudos(request);
+        ResponseEntity<KudoResponse> response = kudosController.publishKudos(request);
 
         // Assert
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());

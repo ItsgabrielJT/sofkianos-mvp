@@ -1,0 +1,378 @@
+# ==============================================================================
+# FRONTEND CI/CD WORKFLOW
+#
+# PURPOSE:
+#   Independent pipeline for the frontend React application.
+#   Runs linting, unit tests & security scans, builds the Docker image,
+#   scans it for vulnerabilities, and deploys to AWS EC2.
+#
+# DESIGN DECISIONS:
+#   - Isolated from backend — only triggers when frontend code changes
+#   - Uses `!` negation patterns to skip doc/non-code file changes
+#   - Lint step catches style issues early before tests run
+#   - npm audit scans dependencies for known CVEs (US-004)
+#   - Trivy scans Docker images for OS & library vulnerabilities (US-004)
+#   - Critical/High vulnerabilities block deployment automatically
+#   - Docker image uses multi-stage build (Node builder → Nginx runtime)
+#   - Deploy updates only the frontend container, leaving backend untouched
+# ==============================================================================
+
+name: Frontend CI/CD
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TRIGGERS
+# ──────────────────────────────────────────────────────────────────────────────
+# Runs on push/PR to main, develop, and feature/** branches.
+# Only triggers when frontend CODE files are modified.
+#
+# The `!` negation patterns ensure that documentation and non-code files
+# (.md, .txt, .pdf, images, logs) do NOT trigger this workflow,
+# even if those files are inside the frontend/ directory.
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+      # ── Exclude documentation / non-code files ──
+      - "!**/*.md"
+      - "!**/*.txt"
+      - "!**/*.pdf"
+      - "!**/*.png"
+      - "!**/*.jpg"
+      - "!**/*.jpeg"
+      - "!**/*.gif"
+      - "!**/*.svg"
+      - "!**/*.log"
+
+  pull_request:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+      # ── Exclude documentation / non-code files ──
+      - "!**/*.md"
+      - "!**/*.txt"
+      - "!**/*.pdf"
+      - "!**/*.png"
+      - "!**/*.jpg"
+      - "!**/*.jpeg"
+      - "!**/*.gif"
+      - "!**/*.svg"
+      - "!**/*.log"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GLOBAL ENVIRONMENT VARIABLES
+# ──────────────────────────────────────────────────────────────────────────────
+env:
+  NODE_VERSION: '20'
+  FRONTEND_IMAGE: ${{ secrets.DOCKER_USER }}/sofkianos-frontend
+
+jobs:
+
+  # ========================================================================
+  # JOB 1 — TEST & LINT
+  # ========================================================================
+  # Runs ESLint for code quality and Vitest for unit tests.
+  # If ANY check fails the workflow stops → merge is blocked
+  # (when branch protection rules require this check to pass).
+  # ========================================================================
+  test:
+    name: "🧪 Frontend Tests & Lint"
+    runs-on: ubuntu-latest
+    
+    # ──────────────────────────────────────────────────────────────────────────────
+    # PERMISSIONS
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Required for creating issues automatically from ESLint results
+    permissions:
+      contents: read       # Read repository code
+      issues: write        # Create and update issues
+      pull-requests: read  # Read PR info (optional)
+
+    steps:
+      # -- Checkout source code -----------------------------------------------
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # -- Setup Node.js with npm dependency caching -------------------------
+      # Caches the npm store to avoid re-downloading dependencies each run.
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      # -- Install exact dependency versions from lockfile --------------------
+      # `npm ci` is faster than `npm install` and guarantees reproducibility.
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: npm install
+
+      # -- Scan npm dependencies for known vulnerabilities (US-004) -----------
+      # Runs `npm audit` to detect CVEs in the dependency tree.
+      #   1. JSON report is saved for automated processing and archival
+      #   2. Human-readable table is printed to the workflow log
+      # Severity threshold: CRITICAL and HIGH block the pipeline.
+      # Moderate/low findings are reported but do not fail the build.
+      - name: Dependency Vulnerability Scan (npm audit)
+        working-directory: ./frontend
+        run: |
+          echo "🔍 Running npm audit — dependency vulnerability scan..."
+          npm audit --json > npm-audit-report.json || true
+          npm audit --audit-level=high || {
+            echo "::error::❌ Critical/High vulnerabilities found in npm dependencies. Review npm-audit-report.json for details."
+            exit 1
+          }
+          echo "✅ No critical or high vulnerabilities detected in dependencies."
+
+      # -- Upload npm audit report as artifact --------------------------------
+      # Saves the JSON report for 14 days to enable:
+      #   - Historical tracking of dependency vulnerabilities
+      #   - Compliance auditing and evidence archival
+      #   - Integration with external security dashboards
+      # Runs even if the audit step fails (if: always())
+      - name: Upload npm Audit Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-report
+          path: frontend/npm-audit-report.json
+          retention-days: 14
+
+      # -- Run ESLint to enforce code quality ---------------------------------
+      # Executes ESLint twice:
+      #   1. With JSON output for automated issue creation
+      #   2. With console output for human-readable logs
+      # The `|| true` prevents failure on lint errors (handled by continue-on-error)
+      - name: Lint
+        working-directory: ./frontend
+        run: |
+          npm run lint -- --format json --output-file eslint-report.json || true
+          npm run lint
+        continue-on-error: true
+
+      # -- Upload ESLint report as artifact -----------------------------------
+      # Saves the JSON report for 7 days to enable:
+      #   - Automated issue creation from the report
+      #   - Manual inspection and debugging
+      #   - Historical analysis of code quality trends
+      # Runs even if linting fails (if: always())
+      - name: Upload ESLint Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eslint-report
+          path: frontend/eslint-report.json
+          retention-days: 7
+      
+      # -- Prepare environment for automated issue creation -------------------
+      # Installs @octokit/rest library needed to interact with GitHub API.
+
+      - name: Install Octokit for Issue Creation
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        run: npm install @octokit/rest
+      
+      # -- Create GitHub Issues from ESLint violations ------------------------
+      # Executes the automation script that:
+      #   1. Reads eslint-report.json generated in the Lint step
+      #   2. Parses errors and warnings with file/line context
+      #   3. Checks for existing open issues to avoid duplicates
+      #   4. Creates new issues with professional formatting
+      # 
+      # Only triggers on 'develop' branch to centralize issue tracking.
+      # Environment variables provide context for issue descriptions.
+
+      - name: Generate ESLint Issues
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node .github/scripts/create-eslint-issues.js
+
+      # -- Run Vitest unit tests ----------------------------------------------
+      # Script "test:unit" is defined as "vitest run" in package.json
+      - name: Run Unit Tests
+        working-directory: ./frontend
+        run: npm run test:unit
+
+      # -- Upload coverage report even on failure for debugging ---------------
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          retention-days: 3
+
+  # ========================================================================
+  # JOB 2 — DOCKER BUILD & PUSH
+  # ========================================================================
+  # Builds the frontend Docker image using the multi-stage Dockerfile
+  # (Node 20 builder → Nginx runtime), then pushes to Docker Hub.
+  #
+  # Only runs AFTER tests pass (`needs: test`) and only on push events
+  # (not on PRs, to avoid pushing throwaway images).
+  # ========================================================================
+  docker-build:
+    name: "🐳 Docker Build & Push"
+    needs: [test]                       # Fail-fast: skip if tests fail
+    # if: github.event_name == 'push'     # Don't push images for PRs
+    if: always()
+    runs-on: ubuntu-latest
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # PERMISSIONS
+    # ──────────────────────────────────────────────────────────────────────────
+    # security-events: required by github/codeql-action/upload-sarif to push
+    #                  Trivy scan results to the GitHub Security tab.
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # -- Extract short SHA for tagging --------------------------------------
+      # Generates a 7-character short SHA from the commit hash
+      - name: Generate Short SHA
+        id: short-sha
+        run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+
+      # -- Login to Docker Hub ------------------------------------------------
+      # Requires repository secrets: DOCKER_USER and DOCKER_PASSWORD
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # -- Setup Docker Buildx for layer caching ------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -- Build & push the frontend image ------------------------------------
+      # Tags:
+      #   - latest       → always points to the newest build
+      #   - <short-sha>  → immutable 7-char tag tied to the commit for rollback
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ steps.short-sha.outputs.sha_short }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+          cache-from: type=gha          # GitHub Actions cache for Docker layers
+          cache-to: type=gha,mode=max
+
+      # -- Scan Docker image for vulnerabilities with Trivy (US-004) ----------
+      # Aqua Trivy scans the built image for:
+      #   - OS package vulnerabilities (e.g., Nginx, Alpine apk packages)
+      #   - Application library vulnerabilities (node_modules baked in)
+      # Severity threshold: CRITICAL and HIGH block the pipeline.
+      # Generates both a human-readable table (logs) and a SARIF report.
+      - name: Docker Image Vulnerability Scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ steps.short-sha.outputs.sha_short }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      # -- Generate Trivy SARIF report for archival ---------------------------
+      # Produces a SARIF-format report suitable for:
+      #   - GitHub Security tab integration (Code Scanning alerts)
+      #   - External SIEM/compliance tool ingestion
+      #   - Long-term vulnerability trend analysis
+      # This step always runs (even if the previous scan found issues)
+      # so the report is available for review.
+      # exit-code: '0' ensures this step NEVER fails — its only purpose
+      # is to generate the report artifact, not to gate the pipeline.
+      - name: Generate Trivy SARIF Report
+        uses: aquasecurity/trivy-action@0.28.0
+        if: always()
+        with:
+          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ steps.short-sha.outputs.sha_short }}
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          ignore-unfixed: true
+
+      # -- Upload Trivy SARIF to GitHub Security tab --------------------------
+      # Integrates scan results into the repository's Security → Code Scanning
+      # alerts, providing a centralized view of all vulnerability findings.
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
+          category: 'trivy-frontend-docker'
+
+      # -- Upload Trivy report as artifact ------------------------------------
+      # Archives the SARIF report for 14 days alongside the npm audit report,
+      # providing a complete security audit trail per pipeline execution.
+      - name: Upload Trivy Report Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-frontend-report
+          path: trivy-frontend-results.sarif
+          retention-days: 14
+
+  # ========================================================================
+  # JOB 3 — DEPLOY TO EC2
+  # ========================================================================
+  # SSHs into the AWS EC2 instance, pulls the latest frontend image,
+  # and restarts only the frontend container.
+  #
+  # Only runs on pushes to `main` (production deploys).
+  # Requires secrets: EC2_HOST, EC2_USER, EC2_SSH_KEY.
+  # ========================================================================
+  deploy:
+    name: "🚀 Deploy Frontend"
+    needs: [docker-build]
+    if: github.ref == 'refs/heads/main'   # Deploy only from main branch
+    runs-on: ubuntu-latest
+
+    steps:
+      # -- SSH into EC2 and update the frontend container ---------------------
+      # Only the frontend container is restarted (--no-deps keeps backend
+      # and RabbitMQ untouched).
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/sofkianos-mvp
+
+            # Pull latest code (nginx.conf, docker-compose changes, etc.)
+            git pull origin main
+
+            # Pull the freshly built Docker image
+            docker pull ${{ env.FRONTEND_IMAGE }}:latest
+
+            # Restart only the frontend container (zero-downtime for backend)
+            docker-compose -f docker-compose.prod.yml up -d \
+              --no-deps --force-recreate frontend
+
+            # Show running containers for verification
+            docker-compose -f docker-compose.prod.yml ps

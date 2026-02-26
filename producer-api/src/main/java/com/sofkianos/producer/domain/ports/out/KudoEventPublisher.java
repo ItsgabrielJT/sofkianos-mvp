@@ -1,9 +1,10 @@
 package com.sofkianos.producer.domain.ports.out;
 
-import com.sofkianos.producer.domain.events.KudoEvent;
+
+import com.sofkianos.producer.domain.model.Kudo;
 
 /**
- * Output Port — defines the contract for publishing a {@link KudoEvent}
+ * Output Port — defines the contract for publishing a {@link Kudo}
  * to an external messaging system (e.g., SQS, RabbitMQ, Kafka).
  * <p>
  * The domain layer depends on this <strong>abstraction</strong>;
@@ -12,11 +13,10 @@ import com.sofkianos.producer.domain.events.KudoEvent;
  * </p>
  */
 public interface KudoEventPublisher {
-
     /**
      * Publishes the given event to the message broker.
      *
-     * @param event the kudo event to publish — must not be {@code null}
+     * @param kudo the kudo event to publish — must not be {@code null}
      */
-    void publish(KudoEvent event);
+    void publish(Kudo kudo);
 }

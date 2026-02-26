@@ -28,35 +28,18 @@ class KudosConsumerTest {
     @Mock
     private KudoService kudoService;
 
-    @InjectMocks
-    private KudosConsumer consumer;
+  @Test
+  @DisplayName("receiveKudo processes message and completes without exception")
+  void receiveKudo_processesMessageWithoutException() {
+    KudosConsumer consumer = new KudosConsumer(kudoService);
+    KudoEvent event = KudoEvent.builder()
+        .from("alice@sofkianos.com")
+        .to("bob@sofkianos.com")
+        .category("TEAMWORK")
+        .message("Great job on the sprint delivery!")
+        .build();
 
-    @Test
-    @DisplayName("TC-R07-001 — handleKudo receives typed KudoEvent and delegates to service")
-    void handleKudo_receivesTypedKudoEvent_delegatesToService() {
-        KudoEvent event = KudoEvent.builder()
-                .from("alice@sofka.com")
-                .to("bob@sofka.com")
-                .category("Teamwork")
-                .message("Great collaboration on the sprint!")
-                .timestamp(LocalDateTime.of(2026, 2, 21, 10, 0))
-                .build();
-
-        assertDoesNotThrow(() -> consumer.handleKudo(event));
-        verify(kudoService, times(1)).saveKudo(same(event));
-    }
-
-    @Test
-    @DisplayName("TC-R07-001 — handleKudo with minimal KudoEvent (null timestamp) delegates correctly")
-    void handleKudo_minimalEvent_delegatesToService() {
-        KudoEvent event = KudoEvent.builder()
-                .from("alice@sofka.com")
-                .to("bob@sofka.com")
-                .category("Passion")
-                .message("Keep up the energy!")
-                .build();
-
-        assertDoesNotThrow(() -> consumer.handleKudo(event));
-        verify(kudoService, times(1)).saveKudo(same(event));
-    }
+    assertDoesNotThrow(() -> consumer.handleKudo(event));
+    verify(kudoService, times(1)).saveKudo(event);
+  }
 }

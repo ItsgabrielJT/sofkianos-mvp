@@ -19,7 +19,6 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 public class KudoEvent {
-
     private String from;
     private String to;
     private String category;

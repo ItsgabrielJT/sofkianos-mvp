@@ -1,0 +1,99 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: sofkian-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    networks:
+      - sofkian-net
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  db:
+    image: postgres:14.3
+    container_name: sofkianos-database
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      POSTGRES_DB: ${SPRING_DATASOURCE_DATABASE_NAME}
+    volumes:
+      - postgres-db:/var/lib/postgresql/data
+    networks:
+      - sofkian-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  producer-api:
+    image: elyriven/sofkianos-producer:stable
+    container_name: sofkianos-producer
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_RABBITMQ_HOST: sofkian-rabbitmq
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - sofkian-net
+
+  consumer-worker:
+    image: elyriven/sofkianos-consumer:stable
+    container_name: sofkianos-consumer
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_RABBITMQ_HOST: ${SPRING_RABBITMQ_HOST}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - sofkian-net
+
+  frontend:
+    image: elyriven/sofkianos-frontend:stable
+    container_name: sofkianos-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - producer-api
+    networks:
+      - sofkian-net
+
+  log-viewer:
+    image: amir20/dozzle:latest
+    container_name: sofkianos-log-viewer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8888:8080"
+    networks:
+      - sofkian-net
+
+volumes:
+  postgres-db:
+    external: false
+    driver: local
+
+networks:
+  sofkian-net:
+    driver: bridge

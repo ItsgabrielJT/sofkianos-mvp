@@ -1,7 +1,9 @@
 package com.sofkianos.producer.infrastructure.messaging;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sofkianos.producer.domain.events.KudoEvent;
+import com.sofkianos.producer.domain.model.Kudo;
+import com.sofkianos.producer.domain.valueobject.KudoCategory;
+import com.sofkianos.producer.infrastructure.messaging.events.KudoEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -15,8 +17,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.awaitility.Awaitility.await;
 
 @Testcontainers
 @SpringBootTest
@@ -40,12 +40,11 @@ class RabbitMqKudoPublisherTest {
     void shouldPublishJsonWithIsoDates() {
         // Arrange
         LocalDateTime now = LocalDateTime.of(2026, 2, 11, 12, 0, 0);
-        KudoEvent event = KudoEvent.builder()
-                .from("Alice")
-                .to("Bob")
-                .message("Integration Test")
-                .timestamp(now)
-                .build();
+        Kudo event = Kudo.create(
+                "Alice",
+                "Bob",
+                KudoCategory.Teamwork,
+                "Integration Test");
 
         // Act
         publisherAdapter.publish(event);

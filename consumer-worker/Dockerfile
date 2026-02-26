@@ -5,10 +5,16 @@ FROM eclipse-temurin:17-jdk-alpine AS builder
 
 WORKDIR /build
 
+RUN apk add --no-cache wget dos2unix
+
 COPY mvnw .
 COPY .mvn .mvn
 COPY pom.xml .
 RUN chmod +x mvnw
+RUN dos2unix mvnw
+
+# Ensure Maven wrapper artifacts exist when building inside Linux
+RUN ./mvnw -N wrapper:wrapper
 
 RUN ./mvnw dependency:go-offline -B
 
@@ -22,7 +28,9 @@ FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache wget
+# Patch all OS-level vulnerabilities detected by Trivy (US-004)
+# and install wget for the healthcheck
+RUN apk upgrade --no-cache && apk add --no-cache wget
 RUN addgroup -g 1000 appgroup && adduser -u 1000 -G appgroup -D appuser
 
 COPY --from=builder /build/target/*.jar app.jar

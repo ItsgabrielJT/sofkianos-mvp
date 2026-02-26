@@ -23,20 +23,19 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class KudosConsumer {
-
     private final KudoService kudoService;
 
     @RabbitListener(queues = RabbitConfig.QUEUE_NAME)
-    public void handleKudo(@Payload KudoEvent event) {
+    public void handleKudo(@Payload KudoEvent message) {
         log.info("Processing started: from={}, to={}, category={}",
-                event.getFrom(), event.getTo(), event.getCategory());
+                message.getFrom(), message.getTo(), message.getCategory());
 
         long start = System.currentTimeMillis();
 
-        kudoService.saveKudo(event);
+        kudoService.saveKudo(message);
 
         long elapsed = System.currentTimeMillis() - start;
         log.info("Processing finished: from={}, to={} ({} ms)",
-                event.getFrom(), event.getTo(), elapsed);
+                message.getFrom(), message.getTo(), elapsed);
     }
 }

@@ -1,10 +1,9 @@
 package com.sofkianos.producer.infrastructure.messaging;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sofkianos.producer.domain.events.KudoEvent;
+import com.sofkianos.producer.domain.model.Kudo;
+import com.sofkianos.producer.infrastructure.messaging.events.KudoEvent;
 import com.sofkianos.producer.domain.ports.out.KudoEventPublisher;
-import com.sofkianos.producer.exception.KudoPublishingException;
+import com.sofkianos.producer.application.exception.KudoMessagingException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpException;
@@ -24,18 +23,21 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class RabbitMqKudoPublisher implements KudoEventPublisher {
-
     private final RabbitTemplate rabbitTemplate;
-
     @Value("${app.rabbitmq.exchange}")
     private String exchangeName;
-
     @Value("${app.rabbitmq.routing-key}")
     private String routingKey;
 
     @Override
-    public void publish(KudoEvent event) {
+    public void publish(Kudo kudo) {
         try {
+            KudoEvent event = KudoEvent.builder()
+                    .from(kudo.fromUser()).to(kudo.toUser())
+                    .category(kudo.category() != null ? kudo.category().name() : null)
+                    .message(kudo.message()).timestamp(kudo.createdAt())
+                    .build();
+
             log.info("Publishing KudoEvent to RabbitMQ: from={}, to={}, category={}",
                     event.getFrom(), event.getTo(), event.getCategory());
 
@@ -44,7 +46,7 @@ public class RabbitMqKudoPublisher implements KudoEventPublisher {
             log.debug("KudoEvent published successfully");
         } catch (AmqpException e) {
             log.error("Failed to publish KudoEvent to RabbitMQ", e);
-            throw new KudoPublishingException("Error publishing KudoEvent to message broker", e);
+            throw new KudoMessagingException("Error publishing KudoEvent to message broker", e);
         }
     }
 }

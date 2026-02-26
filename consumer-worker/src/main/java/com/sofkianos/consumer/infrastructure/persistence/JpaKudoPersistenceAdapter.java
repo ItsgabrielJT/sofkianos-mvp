@@ -7,14 +7,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-/**
- * Infrastructure Adapter that implements {@link KudoPersistencePort}
- * using the Spring Data {@link KudoRepository}.
- * <p>
- * All JPA/Spring Data concerns are encapsulated here — the domain
- * service never imports any persistence framework classes.
- * </p>
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -31,5 +23,10 @@ public class JpaKudoPersistenceAdapter implements KudoPersistencePort {
 
         log.debug("Kudo persisted with id={}", saved.getId());
         return saved;
+    }
+
+    @Override
+    public org.springframework.data.domain.Page<Kudo> findKudos(java.util.Optional<String> category, java.util.Optional<String> searchText, org.springframework.data.domain.Pageable pageable) {
+        return kudoRepository.findKudos(category.orElse(null), searchText.orElse(null), pageable);
     }
 }

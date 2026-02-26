@@ -1,5 +1,6 @@
 package com.sofkianos.producer.controller;
 
+import com.sofkianos.producer.infrastructure.inbound.web.HealthController;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

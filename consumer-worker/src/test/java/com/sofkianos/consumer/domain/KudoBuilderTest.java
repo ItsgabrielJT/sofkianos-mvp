@@ -2,7 +2,7 @@ package com.sofkianos.consumer.domain;
 
 import com.sofkianos.consumer.domain.model.KudoCategory;
 import com.sofkianos.consumer.entity.Kudo;
-import com.sofkianos.consumer.exception.InvalidKudoException;
+import com.sofkianos.consumer.infrastructure.exception.InvalidKudoException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
