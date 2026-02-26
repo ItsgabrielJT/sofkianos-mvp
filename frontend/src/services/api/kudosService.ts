@@ -1,5 +1,10 @@
 import { apiClient } from "./client";
 import type { KudoFormData } from "../../schemas/kudoFormSchema";
+import type {
+  KudoFilters,
+  PagedKudoResponse,
+  SortDirection,
+} from "../../types/kudos.types";
 
 /**
  * Servicio que encapsula todas las operaciones relacionadas con Kudos.
@@ -9,9 +14,11 @@ import type { KudoFormData } from "../../schemas/kudoFormSchema";
  *
  * Métodos disponibles:
  * - **send**: Envía un kudo al backend (POST /v1/kudos)
+ * - **list**: Obtiene listado paginado de kudos (GET /v1/kudos)
  *
  * Características:
- * - Validación de status code esperado (202 Accepted)
+ * - Validación de status code esperado (202 Accepted para send)
+ * - Construcción dinámica de query params para filtros
  * - Manejo de errores mediante excepciones
  * - Tipado fuerte con TypeScript
  * - Integración con esquemas de validación
@@ -62,6 +69,67 @@ export const kudosService = {
     if (response.status !== 202) {
       throw new Error(`Unexpected status: ${response.status}`);
     }
+  },
+
+  /**
+   * Obtiene un listado paginado de kudos desde el backend.
+   *
+   * Realiza una petición GET al endpoint /v1/kudos construyendo
+   * los query parameters a partir de los filtros, página, tamaño
+   * y dirección de ordenamiento proporcionados.
+   *
+   * Los filtros opcionales se agregan al query string solo si están presentes.
+   * Los parámetros obligatorios (page, size, sortDirection) siempre se envían.
+   *
+   * Flujo:
+   * 1. Construye URLSearchParams con parámetros base
+   * 2. Agrega filtros opcionales si están definidos
+   * 3. Envía GET a /v1/kudos?{params}
+   * 4. Retorna respuesta tipada con datos paginados
+   *
+   * @async
+   * @function list
+   * @memberof kudosService
+   * @param {KudoFilters} [filters={}] - Filtros opcionales de búsqueda.
+   * @param {number} [page=0] - Número de página (0-indexed).
+   * @param {number} [size=20] - Cantidad de items por página (máx 50).
+   * @param {SortDirection} [sortDirection='DESC'] - Dirección de ordenamiento por fecha.
+   * @returns {Promise<PagedKudoResponse>} Respuesta paginada con kudos y metadata.
+   * @throws {AxiosError} Si hay error de red o el servidor responde con error.
+   *
+   * @example
+   * // Sin filtros
+   * const response = await kudosService.list();
+   *
+   * @example
+   * // Con filtros y paginación
+   * const response = await kudosService.list(
+   *   { category: 'Teamwork', searchText: 'proyecto' },
+   *   0,
+   *   20,
+   *   'DESC'
+   * );
+   */
+  list: async (
+    filters: KudoFilters = {},
+    page: number = 0,
+    size: number = 20,
+    sortDirection: SortDirection = "DESC",
+  ): Promise<PagedKudoResponse> => {
+    const params = new URLSearchParams();
+    params.append("page", page.toString());
+    params.append("size", size.toString());
+    params.append("sortDirection", sortDirection);
+
+    if (filters.category) params.append("category", filters.category);
+    if (filters.searchText) params.append("searchText", filters.searchText);
+    if (filters.startDate) params.append("startDate", filters.startDate);
+    if (filters.endDate) params.append("endDate", filters.endDate);
+
+    const response = await apiClient.get<PagedKudoResponse>(
+      `/v1/kudos?${params.toString()}`,
+    );
+    return response.data;
   },
 };
 

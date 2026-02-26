@@ -39,7 +39,8 @@ export interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ onNavigateToSection }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const isAppView = location.pathname === "/kudos";
+  const isAppView = location.pathname === "/kudos" || location.pathname === "/kudos/list";
+  const isListView = location.pathname === "/kudos/list";
 
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -140,6 +141,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigateToSection }) => {
           )}
 
           <button
+            onClick={() => { navigate("/kudos/list"); setMobileMenuOpen(false); }}
+            className={`px-4 transition-colors ${
+              isListView
+                ? "text-brand font-semibold"
+                : "text-zinc-400 hover:text-white"
+            }`}
+          >
+            Explorar Kudos
+          </button>
+
+          <div className="h-5 w-px bg-white/10" />
+
+          <button
             onClick={handleToggleView}
             className="
               flex items-center gap-2 px-4
@@ -178,6 +192,17 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigateToSection }) => {
                 </button>
               </>
             )}
+
+            <button
+              onClick={() => { navigate("/kudos/list"); setMobileMenuOpen(false); }}
+              className={`text-left ${
+                isListView
+                  ? "text-brand font-semibold"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              Explorar Kudos
+            </button>
 
             <button
               onClick={handleToggleView}
